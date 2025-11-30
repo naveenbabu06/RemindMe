@@ -22,30 +22,51 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.remindme.ui.theme.RemindMeTheme
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
 
 class AccountActivity : ComponentActivity() {
 
     private lateinit var auth: FirebaseAuth
+    private lateinit var db: FirebaseFirestore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Initialise FirebaseAuth
         auth = FirebaseAuth.getInstance()
+        db = FirebaseFirestore.getInstance()
+
+        // If user already logged in, skip signup
+        if (auth.currentUser != null) {
+            goToHome()
+            return
+        }
 
         setContent {
-            SignupScreen(
-                auth = auth,
-                onSignupSuccess = {
-                    // TODO: Change this to your real "home" screen
-                    val intent = Intent(this, MainActivity::class.java)
-                    startActivity(intent)
-                    finish()
-                }
-            )
+            RemindMeTheme {
+                SignupScreen(
+                    auth = auth,
+                    db = db,
+                    onSignupSuccess = {
+                        goToHome()
+                    },
+                    onNavigateToLogin = {
+                        val intent = Intent(this, LoginActivity::class.java)
+                        startActivity(intent)
+                        finish()
+                    }
+                )
+            }
         }
+    }
+
+    private fun goToHome() {
+        val intent = Intent(this, HomeActivity::class.java)
+        startActivity(intent)
+        finish()
     }
 }
 
@@ -53,7 +74,9 @@ class AccountActivity : ComponentActivity() {
 @Composable
 fun SignupScreen(
     auth: FirebaseAuth,
-    onSignupSuccess: () -> Unit
+    db: FirebaseFirestore,
+    onSignupSuccess: () -> Unit,
+    onNavigateToLogin: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -90,19 +113,41 @@ fun SignupScreen(
             return
         }
 
-        // Clear previous error and start loading
         errorMessage = null
         isLoading = true
 
         auth.createUserWithEmailAndPassword(trimmedEmail, trimmedPassword)
             .addOnCompleteListener { task ->
-                isLoading = false
-                if (task.isSuccessful) {
-                    Toast.makeText(context, "Account created!", Toast.LENGTH_SHORT).show()
-                    onSignupSuccess()
-                } else {
+                if (!task.isSuccessful) {
+                    isLoading = false
                     errorMessage = task.exception?.message ?: "Sign up failed. Please try again."
+                    return@addOnCompleteListener
                 }
+
+                val user = task.result?.user
+                if (user == null) {
+                    isLoading = false
+                    errorMessage = "Couldn't create account. Please try again."
+                    return@addOnCompleteListener
+                }
+
+                // Create user document in Firestore
+                val userData = hashMapOf(
+                    "email" to trimmedEmail,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+
+                db.collection("users").document(user.uid)
+                    .set(userData)
+                    .addOnSuccessListener {
+                        isLoading = false
+                        Toast.makeText(context, "Account created!", Toast.LENGTH_SHORT).show()
+                        onSignupSuccess()
+                    }
+                    .addOnFailureListener { e ->
+                        isLoading = false
+                        errorMessage = e.message ?: "Failed to save user data."
+                    }
             }
     }
 
@@ -216,6 +261,20 @@ fun SignupScreen(
                     )
                 } else {
                     Text(text = "Sign Up", fontSize = 18.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // NAVIGATE TO LOGIN
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(text = "Already have an account?")
+                Spacer(modifier = Modifier.width(4.dp))
+                TextButton(onClick = onNavigateToLogin) {
+                    Text("Log in")
                 }
             }
         }

@@ -1,5 +1,6 @@
 package com.example.remindme
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -10,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -18,40 +18,71 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.remindme.ui.theme.RemindMeTheme
-import androidx.compose.material.icons.outlined.PushPin
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
+
+// -------------------------
+// MODEL
+// -------------------------
+
+data class ReminderEvent(
+    val id: String = "",
+    val title: String = "",
+    val dateLabel: String = "",  // e.g. "Today", "Tomorrow", "Fri 21 Nov"
+    val timeLabel: String = "",  // e.g. "14:00"
+    val notes: String = "",
+    val isPinned: Boolean = false,
+    val isDone: Boolean = false
+)
+
+// -------------------------
+// ACTIVITY
+// -------------------------
 
 class HomeActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
         setContent {
             RemindMeTheme {
-                HomeScreen(
+                val activity = this
+                val ctx = LocalContext.current
+
+                HomeScreenHost(
                     onAddReminder = {
-                        // TODO: Navigate to Add/Edit Reminder screen
-                        // startActivity(Intent(this, AddEditReminderActivity::class.java))
-                        Toast.makeText(this, "Add Reminder (TODO)", Toast.LENGTH_SHORT).show()
+                        activity.startActivity(
+                            Intent(activity, AddEditReminderActivity::class.java)
+                        )
+                    },
+                    onOpenReminder = { event ->
+                        activity.startActivity(
+                            Intent(activity, AddEditReminderActivity::class.java).apply {
+                                putExtra("reminder_id", event.id)
+                            }
+                        )
                     },
                     onOpenSettings = {
-                        // TODO: Navigate to Settings screen when you build it
-                        Toast.makeText(this, "Settings (TODO)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(ctx, "Settings screen coming soon", Toast.LENGTH_SHORT)
+                            .show()
                     },
                     onLogout = {
-                        // TODO: If you want, clear FirebaseAuth.currentUser and go back to Login
-                        finish()
+                        // FirebaseAuth.getInstance().signOut()
+                        activity.finish()
                     }
                 )
             }
@@ -59,67 +90,115 @@ class HomeActivity : ComponentActivity() {
     }
 }
 
-/**
- * Simple model for a reminder – later you can match this to your Room entity:
- * title, date, time, notes, pinned, done, etc.
- */
-data class ReminderEvent(
-    val id: Int,
-    val title: String,
-    val dateLabel: String,  // e.g. "Today", "Tomorrow", "Mon 18 Nov"
-    val timeLabel: String,  // e.g. "09:30"
-    val notes: String,
-    val isPinned: Boolean = false,
-    val isDone: Boolean = false
-)
+// -------------------------
+// FIRESTORE + STATE HOST
+// -------------------------
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun HomeScreen(
+private fun HomeScreenHost(
     onAddReminder: () -> Unit,
+    onOpenReminder: (ReminderEvent) -> Unit,
     onOpenSettings: () -> Unit,
     onLogout: () -> Unit
 ) {
     val ctx = LocalContext.current
+    val auth = remember { FirebaseAuth.getInstance() }
+    val db = remember { FirebaseFirestore.getInstance() }
 
-    // Fake reminders for now – later replace with data from Room (Flow/collectAsState)
-    var reminders by remember {
-        mutableStateOf(
-            listOf(
-                ReminderEvent(
-                    id = 1,
-                    title = "Submit assignment",
-                    dateLabel = "Today",
-                    timeLabel = "14:00",
-                    notes = "CIS4034 – upload to Blackboard before 4pm",
-                    isPinned = true
-                ),
-                ReminderEvent(
-                    id = 2,
-                    title = "Gym session",
-                    dateLabel = "Today",
-                    timeLabel = "18:30",
-                    notes = "Leg day – don’t skip warm-up"
-                ),
-                ReminderEvent(
-                    id = 3,
-                    title = "Call mum",
-                    dateLabel = "Tomorrow",
-                    timeLabel = "20:00",
-                    notes = "Check travel plans for weekend"
-                ),
-                ReminderEvent(
-                    id = 4,
-                    title = "Doctor appointment",
-                    dateLabel = "Fri 21 Nov",
-                    timeLabel = "09:15",
-                    notes = "Bring prescription list"
-                )
-            )
-        )
+    var reminders by remember { mutableStateOf<List<ReminderEvent>>(emptyList()) }
+    var listener: ListenerRegistration? by remember { mutableStateOf<ListenerRegistration?>(null) }
+
+    // Listen to Firestore changes
+    DisposableEffect(Unit) {
+        val uid = auth.currentUser?.uid
+
+        if (uid != null) {
+            val colRef = db.collection("users")
+                .document(uid)
+                .collection("reminders")
+
+            listener = colRef.addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null) return@addSnapshotListener
+
+                val list = snapshot.documents.map { doc ->
+                    ReminderEvent(
+                        id = doc.id,
+                        title = doc.getString("title") ?: "",
+                        dateLabel = doc.getString("dateLabel") ?: "",
+                        timeLabel = doc.getString("timeLabel") ?: "",
+                        notes = doc.getString("notes") ?: "",
+                        isPinned = doc.getBoolean("isPinned") ?: false,
+                        isDone = doc.getBoolean("isDone") ?: false
+                    )
+                }
+                reminders = list
+            }
+        }
+
+        onDispose {
+            listener?.remove()
+        }
     }
 
-    // Derive pinned first, then by date
+    // Firestore actions
+    fun toggleDone(event: ReminderEvent) {
+        val uid = auth.currentUser?.uid ?: return
+        if (event.id.isBlank()) return
+
+        db.collection("users").document(uid)
+            .collection("reminders").document(event.id)
+            .update("isDone", !event.isDone)
+    }
+
+    fun togglePinned(event: ReminderEvent) {
+        val uid = auth.currentUser?.uid ?: return
+        if (event.id.isBlank()) return
+
+        db.collection("users").document(uid)
+            .collection("reminders").document(event.id)
+            .update("isPinned", !event.isPinned)
+    }
+
+    fun delete(event: ReminderEvent) {
+        val uid = auth.currentUser?.uid ?: return
+        if (event.id.isBlank()) return
+
+        db.collection("users").document(uid)
+            .collection("reminders").document(event.id)
+            .delete()
+            .addOnSuccessListener {
+                Toast.makeText(ctx, "Reminder deleted: ${event.title}", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    HomeScreen(
+        reminders = reminders,
+        onToggleDone = ::toggleDone,
+        onTogglePinned = ::togglePinned,
+        onDelete = ::delete,
+        onAddReminder = onAddReminder,
+        onOpenReminder = onOpenReminder,
+        onOpenSettings = onOpenSettings,
+        onLogout = onLogout
+    )
+}
+
+// -------------------------
+// COMPOSABLES
+// -------------------------
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun HomeScreen(
+    reminders: List<ReminderEvent>,
+    onToggleDone: (ReminderEvent) -> Unit,
+    onTogglePinned: (ReminderEvent) -> Unit,
+    onDelete: (ReminderEvent) -> Unit,
+    onAddReminder: () -> Unit,
+    onOpenReminder: (ReminderEvent) -> Unit,
+    onOpenSettings: () -> Unit,
+    onLogout: () -> Unit
+) {
     val sortedReminders = remember(reminders) {
         reminders.sortedWith(
             compareByDescending<ReminderEvent> { it.isPinned }
@@ -146,7 +225,7 @@ fun HomeScreen(
                 actions = {
                     IconButton(onClick = onOpenSettings) {
                         Icon(
-                            imageVector = Icons.Default.Check, // you can pick a better icon later
+                            imageVector = Icons.Default.Check, // change to Settings icon later
                             contentDescription = "Settings"
                         )
                     }
@@ -180,7 +259,6 @@ fun HomeScreen(
                     .fillMaxSize()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                // Next reminder summary
                 if (nextReminder != null) {
                     NextReminderCard(event = nextReminder)
                     Spacer(modifier = Modifier.height(16.dp))
@@ -208,7 +286,6 @@ fun HomeScreen(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Group by date label (Today / Tomorrow / etc.)
                         val grouped = sortedReminders.groupBy { it.dateLabel }
                         grouped.forEach { (date, eventsForDate) ->
                             stickyHeader {
@@ -233,34 +310,10 @@ fun HomeScreen(
                             items(eventsForDate, key = { it.id }) { event ->
                                 ReminderCard(
                                     event = event,
-                                    onToggleDone = { toggled ->
-                                        reminders = reminders.map {
-                                            if (it.id == toggled.id) it.copy(isDone = !it.isDone) else it
-                                        }
-                                    },
-                                    onTogglePinned = { toggled ->
-                                        reminders = reminders.map {
-                                            if (it.id == toggled.id) it.copy(isPinned = !it.isPinned) else it
-                                        }
-                                    },
-                                    onDelete = { deleted ->
-                                        reminders = reminders.filterNot { it.id == deleted.id }
-                                        Toast.makeText(
-                                            ctx,
-                                            "Reminder deleted: ${deleted.title}",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    },
-                                    onClick = {
-                                        // TODO: Navigate to Event Details/Edit screen with this reminder
-                                        Toast
-                                            .makeText(
-                                                ctx,
-                                                "Open details for: ${event.title}",
-                                                Toast.LENGTH_SHORT
-                                            )
-                                            .show()
-                                    }
+                                    onToggleDone = onToggleDone,
+                                    onTogglePinned = onTogglePinned,
+                                    onDelete = onDelete,
+                                    onClick = { onOpenReminder(event) }
                                 )
                             }
                         }

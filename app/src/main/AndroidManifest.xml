@@ -31,6 +31,9 @@
         <activity
             android:name=".HomeActivity"
             android:exported="false" />
+        <activity
+            android:name=".AddEditReminderActivity"
+            android:exported="false" />
 
     </application>
 
