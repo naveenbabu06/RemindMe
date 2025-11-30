@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.*
@@ -76,13 +77,15 @@ class HomeActivity : ComponentActivity() {
                             }
                         )
                     },
-                    onOpenSettings = {
-                        Toast.makeText(ctx, "Settings screen coming soon", Toast.LENGTH_SHORT)
-                            .show()
+                    onOpenProfile = {
+                        activity.startActivity(
+                            Intent(activity, ProfileActivity::class.java)
+                        )
                     },
                     onLogout = {
                         // FirebaseAuth.getInstance().signOut()
                         activity.finish()
+                        Toast.makeText(ctx, "Logged out", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
@@ -98,7 +101,7 @@ class HomeActivity : ComponentActivity() {
 private fun HomeScreenHost(
     onAddReminder: () -> Unit,
     onOpenReminder: (ReminderEvent) -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenProfile: () -> Unit,
     onLogout: () -> Unit
 ) {
     val ctx = LocalContext.current
@@ -178,7 +181,7 @@ private fun HomeScreenHost(
         onDelete = ::delete,
         onAddReminder = onAddReminder,
         onOpenReminder = onOpenReminder,
-        onOpenSettings = onOpenSettings,
+        onOpenProfile = onOpenProfile,
         onLogout = onLogout
     )
 }
@@ -196,7 +199,7 @@ fun HomeScreen(
     onDelete: (ReminderEvent) -> Unit,
     onAddReminder: () -> Unit,
     onOpenReminder: (ReminderEvent) -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenProfile: () -> Unit,
     onLogout: () -> Unit
 ) {
     val sortedReminders = remember(reminders) {
@@ -223,10 +226,10 @@ fun HomeScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenSettings) {
+                    IconButton(onClick = onOpenProfile) {
                         Icon(
-                            imageVector = Icons.Default.Check, // change to Settings icon later
-                            contentDescription = "Settings"
+                            imageVector = Icons.Filled.Person,
+                            contentDescription = "Profile"
                         )
                     }
                 }
