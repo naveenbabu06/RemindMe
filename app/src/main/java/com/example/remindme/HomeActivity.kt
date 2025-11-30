@@ -13,10 +13,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.PushPin
@@ -26,8 +30,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,6 +41,18 @@ import com.example.remindme.ui.theme.RemindMeTheme
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+
+// -------------------------
+// APP GRADIENT
+// -------------------------
+
+// Purple gradient used as the background for Home screen
+val PurpleAppGradient = Brush.verticalGradient(
+    colors = listOf(
+        Color(0xFF6A5AE0),   // deep purple
+        Color(0xFF9575CD)    // lavender
+    )
+)
 
 // -------------------------
 // MODEL
@@ -190,6 +208,10 @@ private fun HomeScreenHost(
 // COMPOSABLES
 // -------------------------
 
+enum class BottomTab {
+    HOME, CATEGORIES
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
@@ -202,6 +224,8 @@ fun HomeScreen(
     onOpenProfile: () -> Unit,
     onLogout: () -> Unit
 ) {
+    var selectedTab by remember { mutableStateOf(BottomTab.HOME) }
+
     val sortedReminders = remember(reminders) {
         reminders.sortedWith(
             compareByDescending<ReminderEvent> { it.isPinned }
@@ -219,7 +243,10 @@ fun HomeScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("RemindMe", fontWeight = FontWeight.Bold, fontSize = 20.sp)
                         Text(
-                            text = "Your upcoming events",
+                            text = if (selectedTab == BottomTab.HOME)
+                                "Your upcoming events"
+                            else
+                                "Task / shopping categories",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -236,11 +263,29 @@ fun HomeScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onAddReminder,
-                containerColor = MaterialTheme.colorScheme.primary
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add reminder")
+            if (selectedTab == BottomTab.HOME) {
+                FloatingActionButton(
+                    onClick = onAddReminder,
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add reminder")
+                }
+            }
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = selectedTab == BottomTab.HOME,
+                    onClick = { selectedTab = BottomTab.HOME },
+                    icon = { Icon(Icons.Filled.Home, contentDescription = "Home") },
+                    label = { Text("Home") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == BottomTab.CATEGORIES,
+                    onClick = { selectedTab = BottomTab.CATEGORIES },
+                    icon = { Icon(Icons.Filled.List, contentDescription = "Categories") },
+                    label = { Text("Categories") }
+                )
             }
         }
     ) { padding ->
@@ -248,81 +293,339 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.surface,
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                        )
-                    )
-                )
+                .background(PurpleAppGradient)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                if (nextReminder != null) {
-                    NextReminderCard(event = nextReminder)
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-
-                Text(
-                    text = "Upcoming reminders",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                    modifier = Modifier.padding(vertical = 4.dp)
+            when (selectedTab) {
+                BottomTab.HOME -> HomeContent(
+                    sortedReminders = sortedReminders,
+                    nextReminder = nextReminder,
+                    onToggleDone = onToggleDone,
+                    onTogglePinned = onTogglePinned,
+                    onDelete = onDelete,
+                    onOpenReminder = onOpenReminder
                 )
 
-                if (sortedReminders.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "No reminders yet.\nTap + to create your first one.",
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val grouped = sortedReminders.groupBy { it.dateLabel }
-                        grouped.forEach { (date, eventsForDate) ->
-                            stickyHeader {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surface,
-                                    tonalElevation = 2.dp,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 8.dp)
-                                ) {
-                                    Text(
-                                        text = date,
-                                        modifier = Modifier
-                                            .padding(vertical = 4.dp, horizontal = 8.dp),
-                                        style = MaterialTheme.typography.labelLarge.copy(
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    )
-                                }
-                            }
+                BottomTab.CATEGORIES -> CategoriesContent()
+            }
+        }
+    }
+}
 
-                            items(eventsForDate, key = { it.id }) { event ->
-                                ReminderCard(
-                                    event = event,
-                                    onToggleDone = onToggleDone,
-                                    onTogglePinned = onTogglePinned,
-                                    onDelete = onDelete,
-                                    onClick = { onOpenReminder(event) }
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HomeContent(
+    sortedReminders: List<ReminderEvent>,
+    nextReminder: ReminderEvent?,
+    onToggleDone: (ReminderEvent) -> Unit,
+    onTogglePinned: (ReminderEvent) -> Unit,
+    onDelete: (ReminderEvent) -> Unit,
+    onOpenReminder: (ReminderEvent) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        if (nextReminder != null) {
+            NextReminderCard(event = nextReminder)
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        Text(
+            text = "Upcoming reminders",
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+            modifier = Modifier.padding(vertical = 4.dp)
+        )
+
+        if (sortedReminders.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No reminders yet.\nTap + to create your first one.",
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val grouped = sortedReminders.groupBy { it.dateLabel }
+                grouped.forEach { (date, eventsForDate) ->
+                    stickyHeader {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 2.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                        ) {
+                            Text(
+                                text = date,
+                                modifier = Modifier
+                                    .padding(vertical = 4.dp, horizontal = 8.dp),
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.SemiBold
                                 )
-                            }
+                            )
                         }
+                    }
+
+                    items(eventsForDate, key = { it.id }) { event ->
+                        ReminderCard(
+                            event = event,
+                            onToggleDone = onToggleDone,
+                            onTogglePinned = onTogglePinned,
+                            onDelete = onDelete,
+                            onClick = { onOpenReminder(event) }
+                        )
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CategoriesContent() {
+    // Category model: each category has a list of items you might want to buy
+    data class Category(
+        val id: String,
+        val title: String,
+        val description: String,
+        val items: List<String>
+    )
+
+    val categories = listOf(
+        Category(
+            id = "groceries",
+            title = "Groceries",
+            description = "Everyday supermarket items",
+            items = listOf(
+                "Bread",
+                "Milk",
+                "Eggs",
+                "Salt",
+                "Rice",
+                "Pasta",
+                "Vegetables",
+                "Fruits"
+            )
+        ),
+        Category(
+            id = "clothes",
+            title = "Clothes",
+            description = "Things to wear",
+            items = listOf(
+                "T-shirt",
+                "Jeans",
+                "Jacket",
+                "Shoes",
+                "Socks",
+                "Hoodie"
+            )
+        ),
+        Category(
+            id = "food_out",
+            title = "Food / Takeaway",
+            description = "Eating out or ordering in",
+            items = listOf(
+                "Pizza",
+                "Burger",
+                "Fries",
+                "Noodles",
+                "Biryani"
+            )
+        ),
+        Category(
+            id = "home",
+            title = "Home items",
+            description = "Things for home and room",
+            items = listOf(
+                "Detergent",
+                "Toilet paper",
+                "Shampoo",
+                "Soap",
+                "Cleaning spray",
+                "Trash bags"
+            )
+        ),
+        Category(
+            id = "electronics",
+            title = "Electronics",
+            description = "Gadgets and accessories",
+            items = listOf(
+                "Phone charger",
+                "Earphones",
+                "USB cable",
+                "Power bank",
+                "Batteries"
+            )
+        ),
+        Category(
+            id = "other",
+            title = "Other",
+            description = "Anything else you need",
+            items = listOf(
+                "Stationery",
+                "Notebook",
+                "Pen",
+                "Gift item"
+            )
+        )
+    )
+
+    // Which category is currently selected
+    var selectedCategoryId by remember { mutableStateOf<String?>(null) }
+    val selectedCategory = categories.find { it.id == selectedCategoryId }
+
+    // Which items have been ticked per category (like a mini shopping list in memory)
+    var selectedItemsByCategory by remember {
+        mutableStateOf<Map<String, Set<String>>>(emptyMap())
+    }
+
+    fun toggleItem(categoryId: String, item: String) {
+        val currentSet = selectedItemsByCategory[categoryId] ?: emptySet()
+        val newSet = if (currentSet.contains(item)) {
+            currentSet - item
+        } else {
+            currentSet + item
+        }
+        selectedItemsByCategory = selectedItemsByCategory.toMutableMap().apply {
+            put(categoryId, newSet)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Task / Shopping categories",
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+        )
+
+        Text(
+            text = "Pick a category and tick what you want to remember to buy or do.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Category cards list
+        categories.forEach { category ->
+            CategoryCard(
+                title = category.title,
+                description = category.description,
+                isSelected = category.id == selectedCategoryId,
+                onClick = {
+                    selectedCategoryId =
+                        if (selectedCategoryId == category.id) null else category.id
+                }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Items inside the selected category
+        if (selectedCategory == null) {
+            Text(
+                text = "Select a category above to see items like bread, salt, clothes, etc.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Text(
+                text = "Items in ${selectedCategory.title}",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            selectedCategory.items.forEach { itemName ->
+                val isChecked =
+                    selectedItemsByCategory[selectedCategory.id]?.contains(itemName) == true
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = isChecked,
+                        onCheckedChange = { toggleItem(selectedCategory.id, itemName) }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = itemName,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
+            val selectedItems = selectedItemsByCategory[selectedCategory.id].orEmpty()
+            if (selectedItems.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Things you marked in this category:",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                selectedItems.forEach { item ->
+                    Text(
+                        text = "• $item",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryCard(
+    title: String,
+    description: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = if (isSelected) 6.dp else 3.dp,
+        border = if (isSelected) {
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        },
+        color = if (isSelected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
