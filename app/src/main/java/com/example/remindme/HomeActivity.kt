@@ -11,14 +11,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
@@ -46,7 +49,6 @@ import com.google.firebase.firestore.ListenerRegistration
 // APP GRADIENT
 // -------------------------
 
-// Purple gradient used as the background for Home screen
 val PurpleAppGradient = Brush.verticalGradient(
     colors = listOf(
         Color(0xFF6A5AE0),   // deep purple
@@ -55,7 +57,7 @@ val PurpleAppGradient = Brush.verticalGradient(
 )
 
 // -------------------------
-// MODEL
+// MODELS
 // -------------------------
 
 data class ReminderEvent(
@@ -66,6 +68,13 @@ data class ReminderEvent(
     val notes: String = "",
     val isPinned: Boolean = false,
     val isDone: Boolean = false
+)
+
+// One groceries / tasks section in the Categories tab
+data class CategorySection(
+    val id: String,
+    val title: String,
+    val items: List<String>
 )
 
 // -------------------------
@@ -246,7 +255,7 @@ fun HomeScreen(
                             text = if (selectedTab == BottomTab.HOME)
                                 "Your upcoming events"
                             else
-                                "Task / shopping categories",
+                                "Groceries & task sections",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -282,7 +291,7 @@ fun HomeScreen(
                 )
                 NavigationBarItem(
                     selected = selectedTab == BottomTab.CATEGORIES,
-                    onClick = { selectedTab = BottomTab.CATEGORIES },
+                    onClick = { selectedTab == BottomTab.CATEGORIES; selectedTab = BottomTab.CATEGORIES },
                     icon = { Icon(Icons.Filled.List, contentDescription = "Categories") },
                     label = { Text("Categories") }
                 )
@@ -389,246 +398,177 @@ private fun HomeContent(
     }
 }
 
+// -------------------------
+// CATEGORIES TAB – GROCERY STYLE
+// -------------------------
+
 @Composable
 private fun CategoriesContent() {
-    // Category model: each category has a list of items you might want to buy
-    data class Category(
-        val id: String,
-        val title: String,
-        val description: String,
-        val items: List<String>
-    )
-
-    val categories = listOf(
-        Category(
-            id = "groceries",
-            title = "Groceries",
-            description = "Everyday supermarket items",
-            items = listOf(
-                "Bread",
-                "Milk",
-                "Eggs",
-                "Salt",
-                "Rice",
-                "Pasta",
-                "Vegetables",
-                "Fruits"
-            )
+    val sections = listOf(
+        CategorySection(
+            id = "frozen",
+            title = "Frozen Foods",
+            items = listOf("Ice cream", "Frozen peas", "Frozen pizza", "Mixed veg")
         ),
-        Category(
-            id = "clothes",
-            title = "Clothes",
-            description = "Things to wear",
-            items = listOf(
-                "T-shirt",
-                "Jeans",
-                "Jacket",
-                "Shoes",
-                "Socks",
-                "Hoodie"
-            )
+        CategorySection(
+            id = "produce",
+            title = "Produce",
+            items = listOf("Apples", "Bananas", "Napa cabbage", "Melon", "Tomatoes")
         ),
-        Category(
-            id = "food_out",
-            title = "Food / Takeaway",
-            description = "Eating out or ordering in",
-            items = listOf(
-                "Pizza",
-                "Burger",
-                "Fries",
-                "Noodles",
-                "Biryani"
-            )
+        CategorySection(
+            id = "sauces",
+            title = "Sauces & Condiments",
+            items = listOf("Almond butter", "XO sauce", "Ketchup", "Soy sauce")
         ),
-        Category(
-            id = "home",
-            title = "Home items",
-            description = "Things for home and room",
-            items = listOf(
-                "Detergent",
-                "Toilet paper",
-                "Shampoo",
-                "Soap",
-                "Cleaning spray",
-                "Trash bags"
-            )
+        CategorySection(
+            id = "seafood",
+            title = "Seafood",
+            items = listOf("Shrimp", "Salmon", "Tuna", "Fish fingers")
         ),
-        Category(
-            id = "electronics",
-            title = "Electronics",
-            description = "Gadgets and accessories",
-            items = listOf(
-                "Phone charger",
-                "Earphones",
-                "USB cable",
-                "Power bank",
-                "Batteries"
-            )
-        ),
-        Category(
-            id = "other",
-            title = "Other",
-            description = "Anything else you need",
-            items = listOf(
-                "Stationery",
-                "Notebook",
-                "Pen",
-                "Gift item"
-            )
+        CategorySection(
+            id = "household",
+            title = "Household",
+            items = listOf("Laundry detergent", "Sponges", "Bin bags", "Dish soap")
         )
     )
 
-    // Which category is currently selected
-    var selectedCategoryId by remember { mutableStateOf<String?>(null) }
-    val selectedCategory = categories.find { it.id == selectedCategoryId }
+    // Expanded sections (open/closed)
+    var expandedSections by remember {
+        mutableStateOf(sections.map { it.id }.toSet()) // all open at start
+    }
 
-    // Which items have been ticked per category (like a mini shopping list in memory)
-    var selectedItemsByCategory by remember {
+    // Checked items per section
+    var checkedItemsBySection by remember {
         mutableStateOf<Map<String, Set<String>>>(emptyMap())
     }
 
-    fun toggleItem(categoryId: String, item: String) {
-        val currentSet = selectedItemsByCategory[categoryId] ?: emptySet()
+    fun toggleSection(sectionId: String) {
+        expandedSections = if (expandedSections.contains(sectionId)) {
+            expandedSections - sectionId
+        } else {
+            expandedSections + sectionId
+        }
+    }
+
+    fun toggleItem(sectionId: String, item: String) {
+        val currentSet = checkedItemsBySection[sectionId] ?: emptySet()
         val newSet = if (currentSet.contains(item)) {
             currentSet - item
         } else {
             currentSet + item
         }
-        selectedItemsByCategory = selectedItemsByCategory.toMutableMap().apply {
-            put(categoryId, newSet)
+        checkedItemsBySection = checkedItemsBySection.toMutableMap().apply {
+            put(sectionId, newSet)
         }
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 16.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = "Task / Shopping categories",
+            text = "Groceries list",
             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
         )
 
         Text(
-            text = "Pick a category and tick what you want to remember to buy or do.",
+            text = "Organise what you need to buy by section, then tick items as you go.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Category cards list
-        categories.forEach { category ->
-            CategoryCard(
-                title = category.title,
-                description = category.description,
-                isSelected = category.id == selectedCategoryId,
-                onClick = {
-                    selectedCategoryId =
-                        if (selectedCategoryId == category.id) null else category.id
-                }
+        sections.forEach { section ->
+            SectionCard(
+                section = section,
+                isExpanded = expandedSections.contains(section.id),
+                checkedItems = checkedItemsBySection[section.id].orEmpty(),
+                onToggleSection = { toggleSection(section.id) },
+                onToggleItem = { item -> toggleItem(section.id, item) }
             )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Items inside the selected category
-        if (selectedCategory == null) {
+        val totalChecked = checkedItemsBySection.values.sumOf { it.size }
+        if (totalChecked > 0) {
             Text(
-                text = "Select a category above to see items like bread, salt, clothes, etc.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
-            Text(
-                text = "Items in ${selectedCategory.title}",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            selectedCategory.items.forEach { itemName ->
-                val isChecked =
-                    selectedItemsByCategory[selectedCategory.id]?.contains(itemName) == true
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = isChecked,
-                        onCheckedChange = { toggleItem(selectedCategory.id, itemName) }
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = itemName,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-
-            val selectedItems = selectedItemsByCategory[selectedCategory.id].orEmpty()
-            if (selectedItems.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Things you marked in this category:",
-                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                selectedItems.forEach { item ->
-                    Text(
-                        text = "• $item",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CategoryCard(
-    title: String,
-    description: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
-        shape = RoundedCornerShape(16.dp),
-        tonalElevation = if (isSelected) 6.dp else 3.dp,
-        border = if (isSelected) {
-            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-        } else {
-            null
-        },
-        color = if (isSelected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-        } else {
-            MaterialTheme.colorScheme.surface
-        }
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(16.dp)
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = description,
+                text = "You’ve selected $totalChecked item(s) in this list.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 }
+
+@Composable
+private fun SectionCard(
+    section: CategorySection,
+    isExpanded: Boolean,
+    checkedItems: Set<String>,
+    onToggleSection: () -> Unit,
+    onToggleItem: (String) -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        tonalElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleSection() },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = section.title,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+                Icon(
+                    imageVector = if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand"
+                )
+            }
+
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                section.items.forEach { itemName ->
+                    val isChecked = checkedItems.contains(itemName)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = isChecked,
+                            onCheckedChange = { onToggleItem(itemName) }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = itemName,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------
+// NEXT REMINDER + REMINDER CARD
+// -------------------------
 
 @Composable
 private fun NextReminderCard(event: ReminderEvent) {
