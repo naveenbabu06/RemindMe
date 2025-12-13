@@ -8,24 +8,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -51,8 +41,8 @@ import com.google.firebase.firestore.ListenerRegistration
 
 val PurpleAppGradient = Brush.verticalGradient(
     colors = listOf(
-        Color(0xFF6A5AE0),   // deep purple
-        Color(0xFF9575CD)    // lavender
+        Color(0xFF6A5AE0),
+        Color(0xFF9575CD)
     )
 )
 
@@ -63,18 +53,25 @@ val PurpleAppGradient = Brush.verticalGradient(
 data class ReminderEvent(
     val id: String = "",
     val title: String = "",
-    val dateLabel: String = "",  // e.g. "Today", "Tomorrow", "Fri 21 Nov"
-    val timeLabel: String = "",  // e.g. "14:00"
+    val dateLabel: String = "",
+    val timeLabel: String = "",
     val notes: String = "",
     val isPinned: Boolean = false,
     val isDone: Boolean = false
 )
 
-// One groceries / tasks section in the Categories tab
 data class CategorySection(
     val id: String,
     val title: String,
     val items: List<String>
+)
+
+data class ShoppingItem(
+    val id: String = "",
+    val name: String = "",
+    val sectionId: String = "",
+    val sectionTitle: String = "",
+    val isChecked: Boolean = false
 )
 
 // -------------------------
@@ -93,9 +90,7 @@ class HomeActivity : ComponentActivity() {
 
                 HomeScreenHost(
                     onAddReminder = {
-                        activity.startActivity(
-                            Intent(activity, AddEditReminderActivity::class.java)
-                        )
+                        activity.startActivity(Intent(activity, AddEditReminderActivity::class.java))
                     },
                     onOpenReminder = { event ->
                         activity.startActivity(
@@ -105,9 +100,7 @@ class HomeActivity : ComponentActivity() {
                         )
                     },
                     onOpenProfile = {
-                        activity.startActivity(
-                            Intent(activity, ProfileActivity::class.java)
-                        )
+                        activity.startActivity(Intent(activity, ProfileActivity::class.java))
                     },
                     onLogout = {
                         // FirebaseAuth.getInstance().signOut()
@@ -136,45 +129,62 @@ private fun HomeScreenHost(
     val db = remember { FirebaseFirestore.getInstance() }
 
     var reminders by remember { mutableStateOf<List<ReminderEvent>>(emptyList()) }
-    var listener: ListenerRegistration? by remember { mutableStateOf<ListenerRegistration?>(null) }
+    var shoppingList by remember { mutableStateOf<List<ShoppingItem>>(emptyList()) }
 
-    // Listen to Firestore changes
+    var reminderListener: ListenerRegistration? by remember { mutableStateOf(null) }
+    var shoppingListener: ListenerRegistration? by remember { mutableStateOf(null) }
+
     DisposableEffect(Unit) {
         val uid = auth.currentUser?.uid
 
         if (uid != null) {
-            val colRef = db.collection("users")
+            // Reminders listener
+            reminderListener = db.collection("users")
                 .document(uid)
                 .collection("reminders")
-
-            listener = colRef.addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null) return@addSnapshotListener
-
-                val list = snapshot.documents.map { doc ->
-                    ReminderEvent(
-                        id = doc.id,
-                        title = doc.getString("title") ?: "",
-                        dateLabel = doc.getString("dateLabel") ?: "",
-                        timeLabel = doc.getString("timeLabel") ?: "",
-                        notes = doc.getString("notes") ?: "",
-                        isPinned = doc.getBoolean("isPinned") ?: false,
-                        isDone = doc.getBoolean("isDone") ?: false
-                    )
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null) return@addSnapshotListener
+                    reminders = snapshot.documents.map { doc ->
+                        ReminderEvent(
+                            id = doc.id,
+                            title = doc.getString("title") ?: "",
+                            dateLabel = doc.getString("dateLabel") ?: "",
+                            timeLabel = doc.getString("timeLabel") ?: "",
+                            notes = doc.getString("notes") ?: "",
+                            isPinned = doc.getBoolean("isPinned") ?: false,
+                            isDone = doc.getBoolean("isDone") ?: false
+                        )
+                    }
                 }
-                reminders = list
-            }
+
+            // Shopping list listener
+            shoppingListener = db.collection("users")
+                .document(uid)
+                .collection("shoppingList")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null) return@addSnapshotListener
+                    shoppingList = snapshot.documents.map { doc ->
+                        ShoppingItem(
+                            id = doc.id,
+                            name = doc.getString("name") ?: "",
+                            sectionId = doc.getString("sectionId") ?: "",
+                            sectionTitle = doc.getString("sectionTitle") ?: "",
+                            isChecked = doc.getBoolean("isChecked") ?: false
+                        )
+                    }.sortedWith(compareBy<ShoppingItem> { it.isChecked }.thenBy { it.sectionTitle }.thenBy { it.name })
+                }
         }
 
         onDispose {
-            listener?.remove()
+            reminderListener?.remove()
+            shoppingListener?.remove()
         }
     }
 
-    // Firestore actions
+    // ---------------- Reminders actions ----------------
     fun toggleDone(event: ReminderEvent) {
         val uid = auth.currentUser?.uid ?: return
         if (event.id.isBlank()) return
-
         db.collection("users").document(uid)
             .collection("reminders").document(event.id)
             .update("isDone", !event.isDone)
@@ -183,16 +193,14 @@ private fun HomeScreenHost(
     fun togglePinned(event: ReminderEvent) {
         val uid = auth.currentUser?.uid ?: return
         if (event.id.isBlank()) return
-
         db.collection("users").document(uid)
             .collection("reminders").document(event.id)
             .update("isPinned", !event.isPinned)
     }
 
-    fun delete(event: ReminderEvent) {
+    fun deleteReminder(event: ReminderEvent) {
         val uid = auth.currentUser?.uid ?: return
         if (event.id.isBlank()) return
-
         db.collection("users").document(uid)
             .collection("reminders").document(event.id)
             .delete()
@@ -201,37 +209,91 @@ private fun HomeScreenHost(
             }
     }
 
+    // ---------------- Shopping list actions ----------------
+    fun addOrRemoveShoppingItem(section: CategorySection, itemName: String) {
+        val uid = auth.currentUser?.uid ?: return
+
+        // if already exists -> delete; else -> add
+        val existing = shoppingList.firstOrNull { it.name == itemName && it.sectionId == section.id }
+        val col = db.collection("users").document(uid).collection("shoppingList")
+
+        if (existing != null) {
+            col.document(existing.id).delete()
+        } else {
+            val data = hashMapOf(
+                "name" to itemName,
+                "sectionId" to section.id,
+                "sectionTitle" to section.title,
+                "isChecked" to false
+            )
+            col.add(data)
+        }
+    }
+
+    fun toggleShoppingChecked(item: ShoppingItem) {
+        val uid = auth.currentUser?.uid ?: return
+        if (item.id.isBlank()) return
+        db.collection("users").document(uid)
+            .collection("shoppingList").document(item.id)
+            .update("isChecked", !item.isChecked)
+    }
+
+    fun removeShoppingItem(item: ShoppingItem) {
+        val uid = auth.currentUser?.uid ?: return
+        if (item.id.isBlank()) return
+        db.collection("users").document(uid)
+            .collection("shoppingList").document(item.id)
+            .delete()
+    }
+
+    fun clearShoppingList() {
+        val uid = auth.currentUser?.uid ?: return
+        val col = db.collection("users").document(uid).collection("shoppingList")
+        shoppingList.forEach { itx ->
+            if (itx.id.isNotBlank()) col.document(itx.id).delete()
+        }
+        Toast.makeText(ctx, "Shopping list cleared", Toast.LENGTH_SHORT).show()
+    }
+
     HomeScreen(
         reminders = reminders,
+        shoppingList = shoppingList,
         onToggleDone = ::toggleDone,
         onTogglePinned = ::togglePinned,
-        onDelete = ::delete,
+        onDeleteReminder = ::deleteReminder,
         onAddReminder = onAddReminder,
         onOpenReminder = onOpenReminder,
         onOpenProfile = onOpenProfile,
-        onLogout = onLogout
+        onLogout = onLogout,
+        onToggleCategoryItem = ::addOrRemoveShoppingItem,
+        onToggleShoppingChecked = ::toggleShoppingChecked,
+        onRemoveShoppingItem = ::removeShoppingItem,
+        onClearShoppingList = ::clearShoppingList
     )
 }
 
 // -------------------------
-// COMPOSABLES
+// UI
 // -------------------------
 
-enum class BottomTab {
-    HOME, CATEGORIES
-}
+enum class BottomTab { HOME, CATEGORIES, SHOPPING }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     reminders: List<ReminderEvent>,
+    shoppingList: List<ShoppingItem>,
     onToggleDone: (ReminderEvent) -> Unit,
     onTogglePinned: (ReminderEvent) -> Unit,
-    onDelete: (ReminderEvent) -> Unit,
+    onDeleteReminder: (ReminderEvent) -> Unit,
     onAddReminder: () -> Unit,
     onOpenReminder: (ReminderEvent) -> Unit,
     onOpenProfile: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onToggleCategoryItem: (CategorySection, String) -> Unit,
+    onToggleShoppingChecked: (ShoppingItem) -> Unit,
+    onRemoveShoppingItem: (ShoppingItem) -> Unit,
+    onClearShoppingList: () -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(BottomTab.HOME) }
 
@@ -242,7 +304,6 @@ fun HomeScreen(
                 .thenBy { it.timeLabel }
         )
     }
-
     val nextReminder = sortedReminders.firstOrNull { !it.isDone }
 
     Scaffold(
@@ -252,10 +313,11 @@ fun HomeScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("RemindMe", fontWeight = FontWeight.Bold, fontSize = 20.sp)
                         Text(
-                            text = if (selectedTab == BottomTab.HOME)
-                                "Your upcoming events"
-                            else
-                                "Groceries & task sections",
+                            text = when (selectedTab) {
+                                BottomTab.HOME -> "Your upcoming events"
+                                BottomTab.CATEGORIES -> "Choose items by section"
+                                BottomTab.SHOPPING -> "Your saved shopping list"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -263,20 +325,14 @@ fun HomeScreen(
                 },
                 actions = {
                     IconButton(onClick = onOpenProfile) {
-                        Icon(
-                            imageVector = Icons.Filled.Person,
-                            contentDescription = "Profile"
-                        )
+                        Icon(Icons.Filled.Person, contentDescription = "Profile")
                     }
                 }
             )
         },
         floatingActionButton = {
             if (selectedTab == BottomTab.HOME) {
-                FloatingActionButton(
-                    onClick = onAddReminder,
-                    containerColor = MaterialTheme.colorScheme.primary
-                ) {
+                FloatingActionButton(onClick = onAddReminder) {
                     Icon(Icons.Default.Add, contentDescription = "Add reminder")
                 }
             }
@@ -291,9 +347,15 @@ fun HomeScreen(
                 )
                 NavigationBarItem(
                     selected = selectedTab == BottomTab.CATEGORIES,
-                    onClick = { selectedTab == BottomTab.CATEGORIES; selectedTab = BottomTab.CATEGORIES },
+                    onClick = { selectedTab = BottomTab.CATEGORIES },
                     icon = { Icon(Icons.Filled.List, contentDescription = "Categories") },
                     label = { Text("Categories") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == BottomTab.SHOPPING,
+                    onClick = { selectedTab = BottomTab.SHOPPING },
+                    icon = { Icon(Icons.Filled.ShoppingCart, contentDescription = "Shopping") },
+                    label = { Text("Shopping") }
                 )
             }
         }
@@ -310,15 +372,29 @@ fun HomeScreen(
                     nextReminder = nextReminder,
                     onToggleDone = onToggleDone,
                     onTogglePinned = onTogglePinned,
-                    onDelete = onDelete,
+                    onDelete = onDeleteReminder,
                     onOpenReminder = onOpenReminder
                 )
 
-                BottomTab.CATEGORIES -> CategoriesContent()
+                BottomTab.CATEGORIES -> CategoriesContent(
+                    shoppingList = shoppingList,
+                    onToggleItem = onToggleCategoryItem
+                )
+
+                BottomTab.SHOPPING -> ShoppingListContent(
+                    shoppingList = shoppingList,
+                    onToggleChecked = onToggleShoppingChecked,
+                    onRemove = onRemoveShoppingItem,
+                    onClearAll = onClearShoppingList
+                )
             }
         }
     }
 }
+
+// -------------------------
+// HOME TAB
+// -------------------------
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -347,10 +423,7 @@ private fun HomeContent(
         )
 
         if (sortedReminders.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     text = "No reminders yet.\nTap + to create your first one.",
                     textAlign = TextAlign.Center,
@@ -374,11 +447,8 @@ private fun HomeContent(
                         ) {
                             Text(
                                 text = date,
-                                modifier = Modifier
-                                    .padding(vertical = 4.dp, horizontal = 8.dp),
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 10.dp),
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
                             )
                         }
                     }
@@ -399,166 +469,102 @@ private fun HomeContent(
 }
 
 // -------------------------
-// CATEGORIES TAB – GROCERY STYLE
+// CATEGORIES TAB (saves to Firestore)
 // -------------------------
 
 @Composable
-private fun CategoriesContent() {
-    val sections = listOf(
-        CategorySection(
-            id = "frozen",
-            title = "Frozen Foods",
-            items = listOf("Ice cream", "Frozen peas", "Frozen pizza", "Mixed veg")
-        ),
-        CategorySection(
-            id = "produce",
-            title = "Produce",
-            items = listOf("Apples", "Bananas", "Napa cabbage", "Melon", "Tomatoes")
-        ),
-        CategorySection(
-            id = "sauces",
-            title = "Sauces & Condiments",
-            items = listOf("Almond butter", "XO sauce", "Ketchup", "Soy sauce")
-        ),
-        CategorySection(
-            id = "seafood",
-            title = "Seafood",
-            items = listOf("Shrimp", "Salmon", "Tuna", "Fish fingers")
-        ),
-        CategorySection(
-            id = "household",
-            title = "Household",
-            items = listOf("Laundry detergent", "Sponges", "Bin bags", "Dish soap")
+private fun CategoriesContent(
+    shoppingList: List<ShoppingItem>,
+    onToggleItem: (CategorySection, String) -> Unit
+) {
+    val sections = remember {
+        listOf(
+            CategorySection("produce", "Produce", listOf("Apples", "Bananas", "Tomatoes", "Onions", "Potatoes")),
+            CategorySection("dairy", "Dairy", listOf("Milk", "Cheese", "Butter", "Yogurt", "Eggs")),
+            CategorySection("bakery", "Bakery", listOf("Bread", "Buns", "Croissant", "Bagels")),
+            CategorySection("meat", "Meat & Seafood", listOf("Chicken", "Beef", "Fish", "Shrimp")),
+            CategorySection("snacks", "Snacks", listOf("Chips", "Biscuits", "Chocolate", "Nuts")),
+            CategorySection("household", "Household", listOf("Detergent", "Bin bags", "Dish soap", "Toilet paper"))
         )
-    )
-
-    // Expanded sections (open/closed)
-    var expandedSections by remember {
-        mutableStateOf(sections.map { it.id }.toSet()) // all open at start
     }
 
-    // Checked items per section
-    var checkedItemsBySection by remember {
-        mutableStateOf<Map<String, Set<String>>>(emptyMap())
-    }
+    // expanded sections UI state
+    var expanded by remember { mutableStateOf(sections.map { it.id }.toSet()) }
 
-    fun toggleSection(sectionId: String) {
-        expandedSections = if (expandedSections.contains(sectionId)) {
-            expandedSections - sectionId
-        } else {
-            expandedSections + sectionId
-        }
-    }
-
-    fun toggleItem(sectionId: String, item: String) {
-        val currentSet = checkedItemsBySection[sectionId] ?: emptySet()
-        val newSet = if (currentSet.contains(item)) {
-            currentSet - item
-        } else {
-            currentSet + item
-        }
-        checkedItemsBySection = checkedItemsBySection.toMutableMap().apply {
-            put(sectionId, newSet)
-        }
+    fun isSaved(sectionId: String, name: String): Boolean {
+        return shoppingList.any { it.sectionId == sectionId && it.name == name }
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(16.dp)
     ) {
+        Text("Categories", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
         Text(
-            text = "Groceries list",
-            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-        )
-
-        Text(
-            text = "Organise what you need to buy by section, then tick items as you go.",
+            "Tap items to save them. They will appear in Shopping List.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(12.dp))
 
-        Spacer(modifier = Modifier.height(8.dp))
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(sections, key = { it.id }) { section ->
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    tonalElevation = 3.dp,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    expanded = if (expanded.contains(section.id)) expanded - section.id else expanded + section.id
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(section.title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
+                            Icon(
+                                imageVector = if (expanded.contains(section.id)) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                contentDescription = "Expand"
+                            )
+                        }
 
-        sections.forEach { section ->
-            SectionCard(
-                section = section,
-                isExpanded = expandedSections.contains(section.id),
-                checkedItems = checkedItemsBySection[section.id].orEmpty(),
-                onToggleSection = { toggleSection(section.id) },
-                onToggleItem = { item -> toggleItem(section.id, item) }
-            )
-        }
+                        if (expanded.contains(section.id)) {
+                            Spacer(Modifier.height(10.dp))
 
-        Spacer(modifier = Modifier.height(8.dp))
+                            section.items.forEach { itemName ->
+                                val saved = isSaved(section.id, itemName)
 
-        val totalChecked = checkedItemsBySection.values.sumOf { it.size }
-        if (totalChecked > 0) {
-            Text(
-                text = "You’ve selected $totalChecked item(s) in this list.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun SectionCard(
-    section: CategorySection,
-    isExpanded: Boolean,
-    checkedItems: Set<String>,
-    onToggleSection: () -> Unit,
-    onToggleItem: (String) -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        tonalElevation = 3.dp,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onToggleSection() },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = section.title,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                )
-                Icon(
-                    imageVector = if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand"
-                )
-            }
-
-            if (isExpanded) {
-                Spacer(modifier = Modifier.height(8.dp))
-                section.items.forEach { itemName ->
-                    val isChecked = checkedItems.contains(itemName)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = isChecked,
-                            onCheckedChange = { onToggleItem(itemName) }
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = itemName,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                        .clickable { onToggleItem(section, itemName) },
+                                    shape = RoundedCornerShape(14.dp),
+                                    tonalElevation = if (saved) 2.dp else 0.dp,
+                                    color = if (saved) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (saved) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+                                            contentDescription = null
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(
+                                            text = itemName,
+                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = if (saved) FontWeight.SemiBold else FontWeight.Normal)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -567,20 +573,113 @@ private fun SectionCard(
 }
 
 // -------------------------
-// NEXT REMINDER + REMINDER CARD
+// SHOPPING LIST TAB (reads saved items from Firestore)
+// -------------------------
+
+@Composable
+private fun ShoppingListContent(
+    shoppingList: List<ShoppingItem>,
+    onToggleChecked: (ShoppingItem) -> Unit,
+    onRemove: (ShoppingItem) -> Unit,
+    onClearAll: () -> Unit
+) {
+    val grouped = remember(shoppingList) {
+        shoppingList.groupBy { it.sectionTitle }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Shopping List",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                modifier = Modifier.weight(1f)
+            )
+
+            if (shoppingList.isNotEmpty()) {
+                TextButton(onClick = onClearAll) { Text("Clear all") }
+            }
+        }
+
+        Text(
+            "These are the items you saved from Categories.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        if (shoppingList.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "No items saved yet.\nGo to Categories and tap items to save them.",
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            return
+        }
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            grouped.forEach { (sectionTitle, itemsInSection) ->
+                item {
+                    Text(
+                        text = sectionTitle,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                }
+
+                items(itemsInSection, key = { it.id }) { item ->
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        tonalElevation = 2.dp,
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = item.isChecked,
+                                onCheckedChange = { onToggleChecked(item) }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = item.name,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = if (item.isChecked) FontWeight.Normal else FontWeight.SemiBold
+                                )
+                            )
+                            IconButton(onClick = { onRemove(item) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Remove")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------
+// CARDS
 // -------------------------
 
 @Composable
 private fun NextReminderCard(event: ReminderEvent) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         tonalElevation = 4.dp
     ) {
         Row(
-            modifier = Modifier
-                .padding(16.dp),
+            modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -630,8 +729,7 @@ private fun ReminderCard(
     onClick: () -> Unit
 ) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         tonalElevation = 2.dp,
         onClick = { onClick() }
@@ -682,20 +780,13 @@ private fun ReminderCard(
                     onClick = { onToggleDone(event) },
                     shape = RoundedCornerShape(50)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "Done",
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (event.isDone) "Mark as not done" else "Mark as done")
+                    Icon(Icons.Default.Check, contentDescription = "Done", modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (event.isDone) "Not done" else "Done")
                 }
 
                 IconButton(onClick = { onDelete(event) }) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete"
-                    )
+                    Icon(Icons.Default.Delete, contentDescription = "Delete")
                 }
             }
         }
