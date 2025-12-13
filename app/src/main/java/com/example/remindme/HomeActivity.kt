@@ -1,11 +1,16 @@
 package com.example.remindme
 
+import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,15 +35,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.example.remindme.ui.theme.RemindMeTheme
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import java.io.File
+import java.util.UUID
 
 // -------------------------
 // APP GRADIENT
 // -------------------------
-
 val PurpleAppGradient = Brush.verticalGradient(
     colors = listOf(
         Color(0xFF6A5AE0),
@@ -49,7 +57,6 @@ val PurpleAppGradient = Brush.verticalGradient(
 // -------------------------
 // MODELS
 // -------------------------
-
 data class ReminderEvent(
     val id: String = "",
     val title: String = "",
@@ -77,7 +84,6 @@ data class ShoppingItem(
 // -------------------------
 // ACTIVITY
 // -------------------------
-
 class HomeActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,7 +122,6 @@ class HomeActivity : ComponentActivity() {
 // -------------------------
 // FIRESTORE + STATE HOST
 // -------------------------
-
 @Composable
 private fun HomeScreenHost(
     onAddReminder: () -> Unit,
@@ -134,11 +139,68 @@ private fun HomeScreenHost(
     var reminderListener: ListenerRegistration? by remember { mutableStateOf(null) }
     var shoppingListener: ListenerRegistration? by remember { mutableStateOf(null) }
 
+    // ---- Camera capture state
+    var pendingPhotoUri by remember { mutableStateOf<Uri?>(null) }
+
+    // Launcher: Take picture
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (!success) {
+            Toast.makeText(ctx, "Photo cancelled", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+
+        val uid = auth.currentUser?.uid
+        val uri = pendingPhotoUri
+
+        if (uid == null || uri == null) {
+            Toast.makeText(ctx, "Could not save photo", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+
+        // Save photo “note” into Firestore (so it’s remembered)
+        val data = hashMapOf(
+            "photoUri" to uri.toString(),
+            "createdAt" to FieldValue.serverTimestamp()
+        )
+
+        db.collection("users")
+            .document(uid)
+            .collection("photoNotes")
+            .add(data)
+            .addOnSuccessListener {
+                Toast.makeText(ctx, "Photo saved!", Toast.LENGTH_SHORT).show()
+            }
+            .addOnFailureListener {
+                Toast.makeText(ctx, "Failed to save photo", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    // Launcher: Request camera permission
+    val requestCameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(ctx, "Camera permission denied", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+
+        // Create Uri + launch camera
+        val uri = createImageUri(ctx)
+        pendingPhotoUri = uri
+        takePictureLauncher.launch(uri)
+    }
+
+    // When user taps camera icon
+    fun onCameraClick() {
+        requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    // --- Firestore listeners
     DisposableEffect(Unit) {
         val uid = auth.currentUser?.uid
-
         if (uid != null) {
-            // Reminders listener
             reminderListener = db.collection("users")
                 .document(uid)
                 .collection("reminders")
@@ -157,7 +219,6 @@ private fun HomeScreenHost(
                     }
                 }
 
-            // Shopping list listener
             shoppingListener = db.collection("users")
                 .document(uid)
                 .collection("shoppingList")
@@ -171,7 +232,9 @@ private fun HomeScreenHost(
                             sectionTitle = doc.getString("sectionTitle") ?: "",
                             isChecked = doc.getBoolean("isChecked") ?: false
                         )
-                    }.sortedWith(compareBy<ShoppingItem> { it.isChecked }.thenBy { it.sectionTitle }.thenBy { it.name })
+                    }.sortedWith(compareBy<ShoppingItem> { it.isChecked }
+                        .thenBy { it.sectionTitle }
+                        .thenBy { it.name })
                 }
         }
 
@@ -212,8 +275,6 @@ private fun HomeScreenHost(
     // ---------------- Shopping list actions ----------------
     fun addOrRemoveShoppingItem(section: CategorySection, itemName: String) {
         val uid = auth.currentUser?.uid ?: return
-
-        // if already exists -> delete; else -> add
         val existing = shoppingList.firstOrNull { it.name == itemName && it.sectionId == section.id }
         val col = db.collection("users").document(uid).collection("shoppingList")
 
@@ -264,6 +325,7 @@ private fun HomeScreenHost(
         onAddReminder = onAddReminder,
         onOpenReminder = onOpenReminder,
         onOpenProfile = onOpenProfile,
+        onCameraClick = ::onCameraClick, // ✅ NEW
         onLogout = onLogout,
         onToggleCategoryItem = ::addOrRemoveShoppingItem,
         onToggleShoppingChecked = ::toggleShoppingChecked,
@@ -275,7 +337,6 @@ private fun HomeScreenHost(
 // -------------------------
 // UI
 // -------------------------
-
 enum class BottomTab { HOME, CATEGORIES, SHOPPING }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -289,6 +350,7 @@ fun HomeScreen(
     onAddReminder: () -> Unit,
     onOpenReminder: (ReminderEvent) -> Unit,
     onOpenProfile: () -> Unit,
+    onCameraClick: () -> Unit, // ✅ NEW
     onLogout: () -> Unit,
     onToggleCategoryItem: (CategorySection, String) -> Unit,
     onToggleShoppingChecked: (ShoppingItem) -> Unit,
@@ -324,6 +386,10 @@ fun HomeScreen(
                     }
                 },
                 actions = {
+                    // ✅ Camera icon (beside profile)
+                    IconButton(onClick = onCameraClick) {
+                        Icon(Icons.Filled.CameraAlt, contentDescription = "Camera")
+                    }
                     IconButton(onClick = onOpenProfile) {
                         Icon(Icons.Filled.Person, contentDescription = "Profile")
                     }
@@ -395,7 +461,6 @@ fun HomeScreen(
 // -------------------------
 // HOME TAB
 // -------------------------
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HomeContent(
@@ -469,9 +534,8 @@ private fun HomeContent(
 }
 
 // -------------------------
-// CATEGORIES TAB (saves to Firestore)
+// CATEGORIES TAB
 // -------------------------
-
 @Composable
 private fun CategoriesContent(
     shoppingList: List<ShoppingItem>,
@@ -488,7 +552,6 @@ private fun CategoriesContent(
         )
     }
 
-    // expanded sections UI state
     var expanded by remember { mutableStateOf(sections.map { it.id }.toSet()) }
 
     fun isSaved(sectionId: String, name: String): Boolean {
@@ -559,7 +622,9 @@ private fun CategoriesContent(
                                         Spacer(Modifier.width(10.dp))
                                         Text(
                                             text = itemName,
-                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = if (saved) FontWeight.SemiBold else FontWeight.Normal)
+                                            style = MaterialTheme.typography.bodyLarge.copy(
+                                                fontWeight = if (saved) FontWeight.SemiBold else FontWeight.Normal
+                                            )
                                         )
                                     }
                                 }
@@ -573,9 +638,8 @@ private fun CategoriesContent(
 }
 
 // -------------------------
-// SHOPPING LIST TAB (reads saved items from Firestore)
+// SHOPPING LIST TAB
 // -------------------------
-
 @Composable
 private fun ShoppingListContent(
     shoppingList: List<ShoppingItem>,
@@ -598,7 +662,6 @@ private fun ShoppingListContent(
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                 modifier = Modifier.weight(1f)
             )
-
             if (shoppingList.isNotEmpty()) {
                 TextButton(onClick = onClearAll) { Text("Clear all") }
             }
@@ -670,7 +733,6 @@ private fun ShoppingListContent(
 // -------------------------
 // CARDS
 // -------------------------
-
 @Composable
 private fun NextReminderCard(event: ReminderEvent) {
     Surface(
@@ -791,4 +853,20 @@ private fun ReminderCard(
             }
         }
     }
+}
+
+// -------------------------
+// FILE PROVIDER URI HELPER
+// -------------------------
+private fun createImageUri(context: Context): Uri {
+    val imagesDir = File(context.cacheDir, "images").apply { mkdirs() }
+    val file = File(imagesDir, "photo_${UUID.randomUUID()}.jpg")
+
+    // IMPORTANT: authority must match Manifest provider authority:
+    // android:authorities="${applicationId}.fileprovider"
+    return FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
 }
